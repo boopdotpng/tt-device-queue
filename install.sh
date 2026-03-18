@@ -10,10 +10,14 @@ echo ""
 
 # 1. Create venv and install dependencies
 echo "[1/4] Setting up Python venv..."
-if [ ! -d "$VENV" ]; then
-  uv venv "$VENV"
+if command -v uv &>/dev/null; then
+  [ -d "$VENV" ] || uv venv "$VENV"
+  uv pip install --python "$VENV/bin/python3" mcp
+else
+  echo "  (uv not found, falling back to python3 -m venv + pip)"
+  [ -d "$VENV" ] || python3 -m venv "$VENV"
+  "$VENV/bin/pip" install mcp
 fi
-uv pip install --python "$VENV/bin/python3" mcp
 
 # 2. Symlink claude-collide to ~/.local/bin
 echo "[2/4] Adding claude-collide to PATH..."
