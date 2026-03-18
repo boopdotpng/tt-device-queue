@@ -1,6 +1,10 @@
 # claude-collide
 
-Device access serialization for Tenstorrent hardware. Ensures only one command touches the device at a time via a FIFO job queue, so multiple AI agents (or humans) don't collide.
+FIFO job queue that serializes access to a shared resource (a GPU, a dev board, a serial port, etc.) so multiple AI agents — or humans — don't collide.
+
+## Why
+
+AI coding agents cannot use `flock` correctly. They forget the lock, release it early, hold it across unrelated work, or simply ignore it when told to use it. After enough wasted debugging sessions watching Claude trample its own device state, we gave up on teaching it and built a queue server instead. If the agent can only run commands by submitting them to a FIFO, it is physically impossible to collide.
 
 ## Components
 
@@ -15,8 +19,8 @@ Device access serialization for Tenstorrent hardware. Ensures only one command t
 │  AI Agent   │ ◄──────────────► │  mcp_server.py │ ──────────► │ server.py  │
 │  (claude,   │                  │                │             │ :5741      │
 │   codex,    │                  │  device_submit │             │            │
-│   opencode) │                  │  device_result │             │  FIFO      │──► Tenstorrent
-│             │                  │  device_run    │             │  worker    │    device
+│   opencode) │                  │  device_result │             │  FIFO      │──► shared
+│             │                  │  device_run    │             │  worker    │    resource
 │             │                  │  device_status │             │            │
 └─────────────┘                  │  device_reset  │             └────────────┘
                                  └────────────────┘
@@ -32,40 +36,50 @@ The MCP server enables an **async two-tool pattern**: the agent calls `device_su
 | `device_result(job_id)` | Yes | Wait for a job to finish, return full output |
 | `device_run(cmd, cwd, timeout)` | Yes | Submit + wait in one call (convenience) |
 | `device_status()` | No | Show running, queued, and recent jobs |
-| `device_reset()` | No | Queue a `tt-smi -r` device reset |
+| `device_reset()` | No | Queue a device reset command |
 
 ## Setup
 
 ```bash
-# Install dependencies
+git clone https://github.com/boopdotpng/claude-collide.git
+cd claude-collide
+./install.sh
+```
+
+The install script creates a venv, installs dependencies, symlinks `claude-collide` into `~/.local/bin`, and starts a systemd user service. At the end it prints the commands to register the MCP server with your agent.
+
+### Manual setup
+
+```bash
+# Install dependencies (or: python3 -m venv .venv && .venv/bin/pip install mcp)
 uv venv .venv
 uv pip install mcp
 
-# Start the queue server (or use systemd)
+# Start the queue server
 python server.py &
 
-# Install systemd service (optional)
-cp tt-device-queue.service ~/.config/systemd/user/
-systemctl --user enable --now tt-device-queue
+# Or install as a systemd service
+cp claude-collide.service ~/.config/systemd/user/
+systemctl --user enable --now claude-collide
 ```
 
 ## Registering the MCP server
 
 The MCP server command is:
 ```
-/path/to/tt-device-queue/.venv/bin/python3 /path/to/tt-device-queue/mcp_server.py
+/path/to/claude-collide/.venv/bin/python3 /path/to/claude-collide/mcp_server.py
 ```
 
 ### Claude Code
 
 ```bash
-claude mcp add -s user tt-device-queue -- /path/to/tt-device-queue/.venv/bin/python3 /path/to/tt-device-queue/mcp_server.py
+claude mcp add -s user tt-device-queue -- /path/to/claude-collide/.venv/bin/python3 /path/to/claude-collide/mcp_server.py
 ```
 
 ### Codex
 
 ```bash
-codex mcp add tt-device-queue -- /path/to/tt-device-queue/.venv/bin/python3 /path/to/tt-device-queue/mcp_server.py
+codex mcp add tt-device-queue -- /path/to/claude-collide/.venv/bin/python3 /path/to/claude-collide/mcp_server.py
 ```
 
 ### OpenCode
@@ -79,9 +93,9 @@ Drop a `.mcp.json` in your project root:
 {
   "mcpServers": {
     "tt-device-queue": {
-      "command": "/path/to/tt-device-queue/.venv/bin/python3",
+      "command": "/path/to/claude-collide/.venv/bin/python3",
       "args": ["mcp_server.py"],
-      "cwd": "/path/to/tt-device-queue",
+      "cwd": "/path/to/claude-collide",
       "timeout": 300
     }
   }
@@ -92,10 +106,10 @@ Drop a `.mcp.json` in your project root:
 
 ```bash
 # Submit and block until done
-claude-collide exec PYTHONPATH=. uv run examples/matmul.py
+claude-collide exec my-command --flag arg
 
 # Submit and get job_id back immediately
-claude-collide queue PYTHONPATH=. uv run examples/matmul.py
+claude-collide queue my-command --flag arg
 
 # Check result
 claude-collide result <job_id>
@@ -103,7 +117,7 @@ claude-collide result <job_id>
 # View queue
 claude-collide status
 
-# Reset device
+# Queue a device reset
 claude-collide reset
 ```
 
