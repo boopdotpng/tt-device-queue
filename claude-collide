@@ -5,9 +5,11 @@ claude-collide — submit commands to the tt-device-queue server.
 Usage:
   claude-collide queue <command...>                Submit a job, return immediately
   claude-collide job <job_id>                      Show structured job status
-  claude-collide logs <job_id> [offset]           Read current job logs
+  claude-collide logs <job_id> [offset] [limit]   Read current job logs
+  claude-collide power                             Sample board power directly
   claude-collide result <job_id>                   Check if a job is done
   claude-collide exec <command...>                 Submit + block until done
+  claude-collide kill                              Kill the running job
   claude-collide status                            Show queue status
   claude-collide reset                             Queue a device reset (tt-smi -r)
 
@@ -28,13 +30,16 @@ import json
 import os
 import sys
 import time
+from pathlib import Path
 
-from queue_client import QueueClientError, get, post
+from queue_client import QueueClientError, get, post, run_power_watch
 
 HOST = "127.0.0.1"
 PORT = int(os.environ.get("TT_DEVICE_PORT", "5741"))
 DEFAULT_TIMEOUT = 120
 BASE = f"http://{HOST}:{PORT}"
+REPO_ROOT = Path(__file__).resolve().parent
+POWER_WATCH = REPO_ROOT / "power_watch.py"
 
 def http_post(path, data):
   try:
@@ -87,11 +92,19 @@ def cmd_job(job_id: str):
   print(json.dumps(data, indent=2))
 
 
-def cmd_logs(job_id: str, offset: int = 0):
-  data = http_get(f"/logs/{job_id}?offset={offset}")
+def cmd_logs(job_id: str, offset: int = 0, limit: int = 16384):
+  data = http_get(f"/logs/{job_id}?offset={offset}&limit={limit}")
   sys.stdout.write(data.get("content", ""))
   if data.get("truncated"):
     print(f"\n[claude-collide] More logs available; next_offset={data.get('next_offset')}", file=sys.stderr)
+
+
+def cmd_power():
+  try:
+    print(run_power_watch(REPO_ROOT, POWER_WATCH))
+  except QueueClientError as exc:
+    print(f"ERROR: {exc}", file=sys.stderr)
+    sys.exit(1)
 
 
 def cmd_exec(cmd: str, timeout: int, cwd: str, repeat: int):
@@ -178,6 +191,15 @@ def cmd_status():
       print(f"  [{r['id']}] {tag} {r.get('elapsed', '?')}s  {r['cmd']}{suffix}")
 
 
+def cmd_kill():
+  data = http_post("/kill", {})
+  killed = data.get("killed")
+  if killed:
+    print(f"killed=[{killed['id']}] {killed['cmd']}")
+  else:
+    print("nothing_running=true")
+
+
 def cmd_reset():
   data = http_post("/queue", {
     "cmd": "tt-smi -r", "cwd": "", "timeout": 30,
@@ -245,10 +267,14 @@ def main():
 
   elif subcmd == "logs":
     if not rest:
-      print("Usage: claude-collide logs <job_id> [offset]", file=sys.stderr)
+      print("Usage: claude-collide logs <job_id> [offset] [limit]", file=sys.stderr)
       sys.exit(1)
     offset = int(rest[1]) if len(rest) > 1 else 0
-    cmd_logs(rest[0], offset)
+    limit = int(rest[2]) if len(rest) > 2 else 16384
+    cmd_logs(rest[0], offset, limit)
+
+  elif subcmd == "power":
+    cmd_power()
 
   elif subcmd == "exec":
     if not rest:
@@ -258,6 +284,9 @@ def main():
 
   elif subcmd == "status":
     cmd_status()
+
+  elif subcmd == "kill":
+    cmd_kill()
 
   elif subcmd == "reset":
     cmd_reset()

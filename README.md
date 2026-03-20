@@ -123,10 +123,16 @@ claude-collide queue my-command --flag arg
 claude-collide job <job_id>
 
 # Stream the current output file in chunks
-claude-collide logs <job_id>
+claude-collide logs <job_id> [offset] [limit]
+
+# Sample board power directly without queueing
+claude-collide power
 
 # Check result
 claude-collide result <job_id>
+
+# Kill the currently running job
+claude-collide kill
 
 # View queue
 claude-collide status
