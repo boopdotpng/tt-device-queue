@@ -11,6 +11,7 @@ Tools:
   device_submit  — Submit a command to the device queue. Returns immediately.
   device_job     — Get non-blocking structured status for a job.
   device_logs    — Read the current output file for a job without blocking.
+  device_power   — Sample board power directly without queueing.
   device_result  — Wait for a job to finish and return its full output.
   device_run     — Submit + wait in one call (convenience, blocks until done).
   device_status  — Show what's running, queued, and recently completed.
@@ -31,7 +32,8 @@ HOST = "127.0.0.1"
 PORT = int(os.environ.get("TT_DEVICE_PORT", "5741"))
 BASE = f"http://{HOST}:{PORT}"
 DEFAULT_TIMEOUT = 60
-AGENT = os.environ.get("TT_AGENT", "mcp-server")
+REPO_ROOT = Path(__file__).resolve().parent
+POWER_WATCH = REPO_ROOT / "power_watch.py"
 
 # Poll interval when waiting for job completion — tight because it's localhost
 POLL_INTERVAL = 0.5
@@ -116,7 +118,6 @@ async def device_submit(
     cwd: str = "",
     timeout: int = DEFAULT_TIMEOUT,
     repeat: int = 1,
-    agent: str = AGENT,
 ) -> str:
     """Submit a command to the device queue and return immediately with a job_id.
 
@@ -135,11 +136,10 @@ async def device_submit(
         repeat: Run the command this many times sequentially inside one queued job;
             all output is appended to the same output file and execution stops on
             the first failure
-        agent: Tag identifying this agent
     """
     async with httpx.AsyncClient() as client:
         result = await _post(client, "/queue", {
-            "cmd": cmd, "cwd": cwd, "timeout": timeout, "repeat": repeat, "agent": agent,
+            "cmd": cmd, "cwd": cwd, "timeout": timeout, "repeat": repeat,
         })
 
     return json.dumps({
@@ -147,6 +147,7 @@ async def device_submit(
         "output_file": result["output_file"],
         "position": result["position"],
         "estimated_wait_sec": result["estimated_wait_sec"],
+        "estimated_run_sec": result.get("estimated_run_sec"),
         "repeat": repeat,
         "hint": "Call device_result(job_id) when you need the output. Repeat runs still use one job_id and append into one output file.",
     }, indent=2)
@@ -187,6 +188,30 @@ async def device_logs(job_id: str, offset: int = 0, limit: int = 16384) -> str:
 
 
 @server.tool()
+async def device_power() -> str:
+    """Sample board power directly for 3 seconds without using the queue.
+
+    This tool is safe to run concurrently and does not consume a queue slot.
+    It returns average, minimum, and maximum total board power in watts.
+    """
+    proc = await asyncio.create_subprocess_exec(
+        "uv", "run", str(POWER_WATCH),
+        cwd=str(REPO_ROOT),
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    stdout, stderr = await proc.communicate()
+    output = stdout.decode().strip()
+    error = stderr.decode().strip()
+
+    if proc.returncode != 0:
+        details = error or output or "power sampling failed"
+        raise DeviceQueueError(details)
+
+    return output
+
+
+@server.tool()
 async def device_result(job_id: str) -> str:
     """Wait for a previously submitted device job to finish and return its
     full output. Blocks until the job completes.
@@ -221,7 +246,6 @@ async def device_run(
     cwd: str = "",
     timeout: int = DEFAULT_TIMEOUT,
     repeat: int = 1,
-    agent: str = AGENT,
 ) -> str:
     """Submit a command to the device queue and wait for it to complete.
 
@@ -240,11 +264,10 @@ async def device_run(
         repeat: Run the command this many times sequentially inside one queued job;
             all output is appended to the same output file and execution stops on
             the first failure
-        agent: Tag identifying this agent
     """
     async with httpx.AsyncClient() as client:
         submit_result = await _post(client, "/queue", {
-            "cmd": cmd, "cwd": cwd, "timeout": timeout, "repeat": repeat, "agent": agent,
+            "cmd": cmd, "cwd": cwd, "timeout": timeout, "repeat": repeat,
         })
 
         job_id = submit_result["job_id"]
@@ -283,7 +306,9 @@ async def device_status() -> str:
             progress = f"  repeat {current.get('repeat_current', 0)}/{repeat}"
         else:
             progress = ""
-        lines.append(f"         agent={current['agent']}  {current['running_sec']}s{progress}")
+        eta = current.get("estimated_remaining_sec")
+        eta_text = f"  eta ~{eta}s" if eta is not None else ""
+        lines.append(f"         {current['running_sec']}s{progress}{eta_text}")
     else:
         lines.append("RUNNING: (idle)")
 
@@ -293,7 +318,9 @@ async def device_status() -> str:
         for p in pending:
             lines.append(f"  [{p['id']}] {p['cmd']}")
             repeat = f"  repeat {p['repeat']}x" if p.get('repeat', 1) > 1 else ""
-            lines.append(f"           agent={p['agent']}  waiting {p['waiting_sec']}s{repeat}")
+            eta = p.get("estimated_wait_sec")
+            eta_text = f"  eta ~{eta}s" if eta is not None else ""
+            lines.append(f"           waiting {p['waiting_sec']}s{repeat}{eta_text}")
     else:
         lines.append("\nQUEUED: (empty)")
 
@@ -320,7 +347,7 @@ async def device_kill() -> str:
 
     killed = result.get("killed")
     if killed:
-        return f"Killed job [{killed['id']}] {killed['cmd']} (agent={killed['agent']})"
+        return f"Killed job [{killed['id']}] {killed['cmd']}"
     return "Nothing running to kill."
 
 
@@ -328,7 +355,7 @@ TT_SMI = os.path.expanduser("~/tenstorrent/.venv/bin/tt-smi")
 
 
 @server.tool()
-async def device_reset(device: int = 0, agent: str = AGENT) -> str:
+async def device_reset(device: int = 0) -> str:
     """Reset the Tenstorrent device via tt-smi. Queued through the FIFO like
     any other command — waits for running jobs to finish first, then resets.
 
@@ -337,12 +364,11 @@ async def device_reset(device: int = 0, agent: str = AGENT) -> str:
 
     Args:
         device: Device number to reset (default 0)
-        agent: Tag identifying this agent
     """
     cmd = f"{TT_SMI} -r {device}"
     async with httpx.AsyncClient() as client:
         submit_result = await _post(client, "/queue", {
-            "cmd": cmd, "cwd": "", "timeout": 30, "agent": f"{agent}/reset",
+            "cmd": cmd, "cwd": "", "timeout": 30,
         })
         job_id = submit_result["job_id"]
         result = await _wait_for_job(client, job_id)

@@ -6,7 +6,7 @@ HTTP API on localhost:5741. Jobs run one at a time (FIFO).
 Output is saved to /tmp/tt-device-logs/<job_id>/output.
 
 Endpoints:
-  POST /queue   {"cmd": "...", "cwd": "...", "timeout": 120, "agent": "..."}
+  POST /queue   {"cmd": "...", "cwd": "...", "timeout": 120, "repeat": 1}
                 -> {"job_id", "output_file", "position", "estimated_wait_sec"}
 
   GET  /result/<job_id>
@@ -37,7 +37,7 @@ HOST = os.environ.get("TT_DEVICE_HOST", "127.0.0.1")
 PORT = int(os.environ.get("TT_DEVICE_PORT", "5741"))
 DEFAULT_TIMEOUT = int(os.environ.get("TT_DEVICE_TIMEOUT", "120"))
 LOG_DIR = Path(os.environ.get("TT_DEVICE_LOG_DIR", "/tmp/tt-device-logs"))
-ESTIMATE_PER_JOB = 10  # seconds assumed per queued job
+DEFAULT_ITER_ESTIMATE_SEC = 10
 MAX_LOG_READ = 64 * 1024
 
 LOG_DIR.mkdir(parents=True, exist_ok=True)
@@ -56,7 +56,6 @@ class Job:
   cwd: str
   timeout: int
   repeat: int
-  agent: str
   submitted: float = field(default_factory=time.time)
   # Filled in by worker
   status: str = "queued"        # queued -> running -> done
@@ -67,6 +66,9 @@ class Job:
   finished_at: float | None = None
   repeat_current: int = 0
   repeat_completed: int = 0
+  current_iteration_started_at: float | None = None
+  first_iteration_elapsed: float | None = None
+  per_iter_estimate_sec: float = DEFAULT_ITER_ESTIMATE_SEC
 
 
 class DeviceQueue:
@@ -79,7 +81,41 @@ class DeviceQueue:
     self._history: list[dict] = []
     self._lock = threading.Lock()
 
-  def submit(self, cmd: str, cwd: str, timeout: int, repeat: int, agent: str) -> tuple["Job", int, int]:
+  def _estimated_remaining_locked(self, job: Job, now: float | None = None) -> int:
+    now = now or time.time()
+
+    if job.status == "done":
+      return 0
+
+    per_iter = max(1.0, job.per_iter_estimate_sec)
+    if job.status == "queued":
+      return int(round(job.repeat * per_iter))
+
+    current_started = job.current_iteration_started_at or job.started_at or now
+    current_elapsed = max(0.0, now - current_started)
+    remaining_current = max(0.0, per_iter - current_elapsed)
+    remaining_after = max(0, job.repeat - job.repeat_current) * per_iter
+    return int(round(remaining_current + remaining_after))
+
+  def _estimate_wait_locked(self, pending_ids: list[str], include_current: bool) -> int:
+    now = time.time()
+    total = 0
+    if include_current and self._current is not None:
+      total += self._estimated_remaining_locked(self._current, now=now)
+    for jid in pending_ids:
+      total += self._estimated_remaining_locked(self._jobs[jid], now=now)
+    return total
+
+  def estimated_remaining(self, job: Job) -> int:
+    with self._lock:
+      return self._estimated_remaining_locked(job)
+
+  def estimated_wait_for_position(self, position: int) -> int:
+    with self._lock:
+      pending_slice = self._pending_ids[:max(position, 0)]
+      return self._estimate_wait_locked(pending_slice, include_current=True)
+
+  def submit(self, cmd: str, cwd: str, timeout: int, repeat: int) -> tuple["Job", int, int]:
     """Submit a job. Returns (job, position, estimated_wait_sec) computed atomically."""
     if repeat < 1:
       raise ValueError("repeat must be >= 1")
@@ -91,7 +127,7 @@ class DeviceQueue:
 
     job = Job(
       id=job_id, cmd=cmd, cwd=cwd, timeout=timeout, repeat=repeat,
-      agent=agent, output_file=output_file,
+      output_file=output_file,
     )
 
     with self._lock:
@@ -100,9 +136,10 @@ class DeviceQueue:
       # Compute position while still holding the lock, before the worker can dequeue
       pos = self._pending_ids.index(job_id)
       jobs_ahead = pos + (1 if self._current else 0)
+      wait_sec = self._estimate_wait_locked(self._pending_ids[:pos], include_current=True)
 
     self._queue.put(job)
-    return job, jobs_ahead, jobs_ahead * ESTIMATE_PER_JOB
+    return job, jobs_ahead, wait_sec
 
   def get_job(self, job_id: str) -> Job | None:
     return self._jobs.get(job_id)
@@ -125,18 +162,21 @@ class DeviceQueue:
       if self._current:
         j = self._current
         current = {
-          "id": j.id, "cmd": j.cmd[:120], "agent": j.agent,
+          "id": j.id, "cmd": j.cmd[:120],
           "running_sec": round(time.time() - (j.started_at or j.submitted), 1),
+          "estimated_remaining_sec": self._estimated_remaining_locked(j),
           "repeat": j.repeat,
           "repeat_current": j.repeat_current,
           "repeat_completed": j.repeat_completed,
         }
       pending = []
-      for jid in self._pending_ids:
+      for index, jid in enumerate(self._pending_ids):
         j = self._jobs[jid]
         pending.append({
-          "id": j.id, "cmd": j.cmd[:120], "agent": j.agent,
+          "id": j.id, "cmd": j.cmd[:120],
           "waiting_sec": round(time.time() - j.submitted, 1),
+          "estimated_wait_sec": self._estimate_wait_locked(self._pending_ids[:index], include_current=True),
+          "estimated_run_sec": self._estimated_remaining_locked(j),
           "repeat": j.repeat,
         })
       return {
@@ -150,17 +190,22 @@ class DeviceQueue:
       position = None
       estimated_wait_sec = None
       running_sec = None
+      estimated_remaining_sec = None
       if job.status == "queued":
         try:
           pos = self._pending_ids.index(job.id)
         except ValueError:
           pos = -1
         position = pos + 1
-        estimated_wait_sec = (pos + 1) * ESTIMATE_PER_JOB
+        estimated_wait_sec = self._estimate_wait_locked(self._pending_ids[:max(pos, 0)], include_current=True)
+        estimated_remaining_sec = self._estimated_remaining_locked(job)
       elif job.status == "running":
         running_sec = round(time.time() - (job.started_at or job.submitted), 1)
         position = 0
-        estimated_wait_sec = max(0, ESTIMATE_PER_JOB - running_sec)
+        estimated_wait_sec = 0
+        estimated_remaining_sec = self._estimated_remaining_locked(job)
+      elif job.status == "done":
+        estimated_remaining_sec = 0
 
       data = {
         "job_id": job.id,
@@ -171,7 +216,8 @@ class DeviceQueue:
         "repeat": job.repeat,
         "repeat_current": job.repeat_current,
         "repeat_completed": job.repeat_completed,
-        "agent": job.agent,
+        "first_iteration_elapsed": job.first_iteration_elapsed,
+        "per_iter_estimate_sec": round(job.per_iter_estimate_sec, 2),
         "submitted_at": _format_timestamp(job.submitted),
         "started_at": _format_timestamp(job.started_at),
         "finished_at": _format_timestamp(job.finished_at),
@@ -184,6 +230,8 @@ class DeviceQueue:
         data["position"] = position
       if estimated_wait_sec is not None:
         data["estimated_wait_sec"] = estimated_wait_sec
+      if estimated_remaining_sec is not None:
+        data["estimated_remaining_sec"] = estimated_remaining_sec
       if running_sec is not None:
         data["running_sec"] = running_sec
 
@@ -224,7 +272,7 @@ class DeviceQueue:
       job = self._current
       if not proc or not job:
         return None
-      info = {"id": job.id, "cmd": job.cmd[:120], "agent": job.agent}
+      info = {"id": job.id, "cmd": job.cmd[:120]}
 
     # Kill the entire process group
     try:
@@ -257,6 +305,7 @@ class DeviceQueue:
           for iteration in range(1, job.repeat + 1):
             with self._lock:
               job.repeat_current = iteration
+              job.current_iteration_started_at = time.time()
 
             if job.repeat > 1:
               out_f.write(f"\n[claude-collide] Repeat {iteration}/{job.repeat}\n")
@@ -288,12 +337,18 @@ class DeviceQueue:
             if exit_code != 0:
               break
 
+            iteration_elapsed = time.time() - (job.current_iteration_started_at or time.time())
             with self._lock:
               job.repeat_completed = iteration
+              if job.first_iteration_elapsed is None:
+                job.first_iteration_elapsed = round(iteration_elapsed, 2)
+                job.per_iter_estimate_sec = max(0.1, iteration_elapsed)
+              job.current_iteration_started_at = None
 
           if exit_code == 0:
             with self._lock:
               job.repeat_completed = job.repeat
+              job.current_iteration_started_at = None
       except Exception as e:
         exit_code = -1
         with open(job.output_file, "a") as f:
@@ -306,15 +361,17 @@ class DeviceQueue:
         job.exit_code = exit_code
         job.elapsed = elapsed
         job.finished_at = time.time()
+        job.current_iteration_started_at = None
         self._current = None
         self._current_proc = None
         self._history.append({
-          "id": job.id, "cmd": job.cmd[:120], "agent": job.agent,
+          "id": job.id, "cmd": job.cmd[:120],
           "exit_code": exit_code, "elapsed": elapsed,
           "finished": time.strftime("%H:%M:%S"),
           "output_file": job.output_file,
           "repeat": job.repeat,
           "repeat_completed": job.repeat_completed,
+          "per_iter_estimate_sec": round(job.per_iter_estimate_sec, 2),
         })
         if len(self._history) > 50:
           self._history = self._history[-50:]
@@ -323,9 +380,11 @@ class DeviceQueue:
       meta_path = Path(job.output_file).parent / "meta.json"
       with open(meta_path, "w") as f:
         json.dump({
-          "id": job.id, "cmd": job.cmd, "cwd": job.cwd, "agent": job.agent,
+          "id": job.id, "cmd": job.cmd, "cwd": job.cwd,
           "exit_code": exit_code, "elapsed": elapsed, "repeat": job.repeat,
           "repeat_completed": job.repeat_completed,
+          "first_iteration_elapsed": job.first_iteration_elapsed,
+          "per_iter_estimate_sec": round(job.per_iter_estimate_sec, 2),
           "started": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(job.started_at)),
           "finished": _format_timestamp(job.finished_at),
           "output_file": job.output_file,
@@ -400,6 +459,7 @@ class Handler(BaseHTTPRequestHandler):
           "exit_code": job.exit_code,
           "output_file": job.output_file,
           "elapsed": job.elapsed,
+          "estimated_remaining_sec": 0,
           "repeat": job.repeat,
           "repeat_completed": job.repeat_completed,
           "started_at": _format_timestamp(job.started_at),
@@ -410,10 +470,13 @@ class Handler(BaseHTTPRequestHandler):
         self._json_response(200, {
           "status": "running",
           "position": 0,
-          "estimated_wait_sec": max(0, ESTIMATE_PER_JOB - running_for),
+          "estimated_wait_sec": 0,
+          "estimated_remaining_sec": dq.estimated_remaining(job),
           "repeat": job.repeat,
           "repeat_current": job.repeat_current,
           "repeat_completed": job.repeat_completed,
+          "first_iteration_elapsed": job.first_iteration_elapsed,
+          "per_iter_estimate_sec": round(job.per_iter_estimate_sec, 2),
           "started_at": _format_timestamp(job.started_at),
         })
       else:
@@ -421,10 +484,13 @@ class Handler(BaseHTTPRequestHandler):
         self._json_response(200, {
           "status": "queued",
           "position": pos + 1,  # 1-indexed for humans
-          "estimated_wait_sec": (pos + 1) * ESTIMATE_PER_JOB,
+          "estimated_wait_sec": dq.estimated_wait_for_position(pos),
+          "estimated_remaining_sec": dq.estimated_remaining(job),
           "repeat": job.repeat,
           "repeat_current": job.repeat_current,
           "repeat_completed": job.repeat_completed,
+          "first_iteration_elapsed": job.first_iteration_elapsed,
+          "per_iter_estimate_sec": round(job.per_iter_estimate_sec, 2),
           "submitted_at": _format_timestamp(job.submitted),
         })
       return
@@ -473,7 +539,6 @@ class Handler(BaseHTTPRequestHandler):
         cwd=body.get("cwd", ""),
         timeout=body.get("timeout", DEFAULT_TIMEOUT),
         repeat=body.get("repeat", 1),
-        agent=body.get("agent", "unknown"),
       )
 
       self._json_response(200, {
@@ -481,6 +546,7 @@ class Handler(BaseHTTPRequestHandler):
         "output_file": job.output_file,
         "position": jobs_ahead,
         "estimated_wait_sec": wait_sec,
+        "estimated_run_sec": int(round(job.repeat * job.per_iter_estimate_sec)),
         "repeat": job.repeat,
       })
       return

@@ -78,13 +78,12 @@ class QueueServerTest(unittest.TestCase):
     with urllib.request.urlopen(req, timeout=5) as resp:
       return json.loads(resp.read())
 
-  def submit(self, cmd: str, timeout: int = 5, repeat: int = 1, agent: str = "test") -> dict:
+  def submit(self, cmd: str, timeout: int = 5, repeat: int = 1) -> dict:
     return self.post_json("/queue", {
       "cmd": cmd,
       "cwd": str(REPO_ROOT),
       "timeout": timeout,
       "repeat": repeat,
-      "agent": agent,
     })
 
   def wait_for_done(self, job_id: str, timeout: float = 10.0) -> dict:
@@ -102,6 +101,7 @@ class QueueServerTest(unittest.TestCase):
   def test_repeat_success_uses_one_job_and_one_output_file(self):
     submit = self.submit(self.python_cmd("print('ok')"), repeat=3)
     self.assertEqual(submit["repeat"], 3)
+    self.assertEqual(submit["estimated_run_sec"], 30)
 
     result = self.wait_for_done(submit["job_id"])
     self.assertEqual(result["exit_code"], 0)
@@ -157,8 +157,8 @@ class QueueServerTest(unittest.TestCase):
     self.assertIn("Timed out after 1s", logs["content"])
 
   def test_job_endpoint_reports_queue_running_and_done_metadata(self):
-    first = self.submit("sleep 1", timeout=5, agent="first")
-    second = self.submit(self.python_cmd("print('second')"), timeout=5, repeat=2, agent="second")
+    first = self.submit("sleep 1", timeout=5)
+    second = self.submit(self.python_cmd("print('second')"), timeout=5, repeat=2)
 
     queued = self.get_json(f"/job/{second['job_id']}")
     self.assertEqual(queued["status"], "queued")
@@ -187,6 +187,36 @@ class QueueServerTest(unittest.TestCase):
     self.assertIsNotNone(done["started_at"])
     self.assertIsNotNone(done["finished_at"])
     self.assertEqual(done["exit_code"], 0)
+
+  def test_initial_repeat_estimate_scales_with_repeat_count(self):
+    submit = self.submit("sleep 1", timeout=5, repeat=4)
+
+    self.assertEqual(submit["estimated_run_sec"], 40)
+
+    queued = self.submit(self.python_cmd("print('queued')"), timeout=5)
+    self.assertGreaterEqual(queued["estimated_wait_sec"], 30)
+
+    self.wait_for_done(submit["job_id"])
+    self.wait_for_done(queued["job_id"])
+
+  def test_first_iteration_updates_repeat_eta(self):
+    submit = self.submit("sleep 0.4", timeout=5, repeat=4)
+
+    refined = None
+    deadline = time.time() + 5
+    while time.time() < deadline:
+      job = self.get_json(f"/job/{submit['job_id']}")
+      if job["status"] == "running" and job["repeat_completed"] >= 1:
+        refined = job
+        break
+      time.sleep(0.05)
+
+    self.assertIsNotNone(refined)
+    self.assertLess(refined["per_iter_estimate_sec"], 2.0)
+    self.assertIsNotNone(refined["first_iteration_elapsed"])
+    self.assertLess(refined["estimated_remaining_sec"], 10)
+
+    self.wait_for_done(submit["job_id"])
 
   def test_logs_endpoint_supports_offsets_and_completion(self):
     cmd = self.python_cmd(
@@ -218,7 +248,6 @@ class QueueServerTest(unittest.TestCase):
       "cmd": self.python_cmd("print('plain')"),
       "cwd": str(REPO_ROOT),
       "timeout": 5,
-      "agent": "default-repeat",
     }
     submit = self.post_json("/queue", payload)
     self.assertEqual(submit["repeat"], 1)

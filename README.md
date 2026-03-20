@@ -35,12 +35,13 @@ The MCP server enables an **async two-tool pattern**: the agent calls `device_su
 | `device_submit(cmd, cwd, timeout, repeat)` | No | Enqueue a command, get back a `job_id` immediately |
 | `device_job(job_id)` | No | Fetch structured per-job status, timestamps, repeat progress, and queue position |
 | `device_logs(job_id, offset, limit)` | No | Read the current output file for a job without blocking |
+| `device_power()` | No | Sample board power for 3 seconds without consuming a queue slot |
 | `device_result(job_id)` | Yes | Wait for a job to finish, return full output |
 | `device_run(cmd, cwd, timeout, repeat)` | Yes | Submit + wait in one call (convenience) |
 | `device_status()` | No | Show running, queued, and recent jobs |
 | `device_reset()` | No | Queue a device reset command |
 
-`repeat` defaults to `1`. When set higher, the server runs the same command sequentially inside a single queued job, appends all iterations into the same output file, and still returns one `job_id` for the agent to track. It stops immediately on the first failing iteration and exposes repeat progress through `device_job` and `device_status`.
+`repeat` defaults to `1`. When set higher, the server runs the same command sequentially inside a single queued job, appends all iterations into the same output file, and still returns one `job_id` for the agent to track. It stops immediately on the first failing iteration and exposes repeat progress through `device_job` and `device_status`. Initial ETA scales with `repeat`, then refines after the first successful iteration by reusing that iteration's runtime as the per-repeat estimate.
 
 ## Setup
 

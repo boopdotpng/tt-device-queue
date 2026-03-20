@@ -14,7 +14,6 @@ Usage:
 Options (before subcommand):
   --timeout N     Execution timeout in seconds (default: 120)
   --repeat N      Run the command N times sequentially (default: 1)
-  --agent NAME    Tag this job (default: $TT_AGENT or pid-$$)
   --port PORT     Server port (default: 5741)
   --cwd DIR       Working directory for the command (default: current directory)
 
@@ -35,7 +34,6 @@ import urllib.error
 HOST = "127.0.0.1"
 PORT = int(os.environ.get("TT_DEVICE_PORT", "5741"))
 DEFAULT_TIMEOUT = 120
-AGENT = os.environ.get("TT_AGENT", f"pid-{os.getpid()}")
 BASE = f"http://{HOST}:{PORT}"
 
 
@@ -69,12 +67,12 @@ def http_get(path):
     sys.exit(1)
 
 
-def cmd_queue(cmd: str, timeout: int, agent: str, cwd: str, repeat: int):
+def cmd_queue(cmd: str, timeout: int, cwd: str, repeat: int):
   if repeat < 1:
     print("ERROR: --repeat must be >= 1", file=sys.stderr)
     sys.exit(1)
   data, code = http_post("/queue", {
-    "cmd": cmd, "cwd": cwd, "timeout": timeout, "repeat": repeat, "agent": agent,
+    "cmd": cmd, "cwd": cwd, "timeout": timeout, "repeat": repeat,
   })
   if code != 200:
     print(f"ERROR: {data.get('error', 'unknown')}", file=sys.stderr)
@@ -125,13 +123,13 @@ def cmd_logs(job_id: str, offset: int = 0):
     print(f"\n[claude-collide] More logs available; next_offset={data.get('next_offset')}", file=sys.stderr)
 
 
-def cmd_exec(cmd: str, timeout: int, agent: str, cwd: str, repeat: int):
+def cmd_exec(cmd: str, timeout: int, cwd: str, repeat: int):
   """Submit, poll until done, print result."""
   if repeat < 1:
     print("ERROR: --repeat must be >= 1", file=sys.stderr)
     sys.exit(1)
   data, code = http_post("/queue", {
-    "cmd": cmd, "cwd": cwd, "timeout": timeout, "repeat": repeat, "agent": agent,
+    "cmd": cmd, "cwd": cwd, "timeout": timeout, "repeat": repeat,
   })
   if code != 200:
     print(f"ERROR: {data.get('error', 'unknown')}", file=sys.stderr)
@@ -184,7 +182,7 @@ def cmd_status():
 
   if current:
     print(f"RUNNING: [{current['id']}] {current['cmd']}")
-    print(f"         agent={current['agent']}  {current['running_sec']}s")
+    print(f"         {current['running_sec']}s")
   else:
     print("RUNNING: (idle)")
 
@@ -192,7 +190,7 @@ def cmd_status():
     print(f"\nQUEUED ({len(pending)}):")
     for p in pending:
       print(f"  [{p['id']}] {p['cmd']}")
-      print(f"           agent={p['agent']}  waiting {p['waiting_sec']}s")
+      print(f"           waiting {p['waiting_sec']}s")
   else:
     print("\nQUEUED: (empty)")
 
@@ -203,9 +201,9 @@ def cmd_status():
       print(f"  [{r['id']}] {tag} {r.get('elapsed', '?')}s  {r['cmd']}")
 
 
-def cmd_reset(agent: str):
+def cmd_reset():
   data, code = http_post("/queue", {
-    "cmd": "tt-smi -r", "cwd": "", "timeout": 30, "agent": f"{agent}/reset",
+    "cmd": "tt-smi -r", "cwd": "", "timeout": 30,
   })
   if code != 200:
     print(f"ERROR: {data.get('error', 'unknown')}", file=sys.stderr)
@@ -219,7 +217,6 @@ def main():
   argv = sys.argv[1:]
   timeout = DEFAULT_TIMEOUT
   repeat = 1
-  agent = AGENT
 
   cwd = None
 
@@ -230,9 +227,6 @@ def main():
       argv = argv[2:]
     elif argv[0] == "--repeat" and len(argv) > 1:
       repeat = int(argv[1])
-      argv = argv[2:]
-    elif argv[0] == "--agent" and len(argv) > 1:
-      agent = argv[1]
       argv = argv[2:]
     elif argv[0] == "--port" and len(argv) > 1:
       global PORT, BASE
@@ -261,7 +255,7 @@ def main():
     if not rest:
       print("Usage: claude-collide queue <command...>", file=sys.stderr)
       sys.exit(1)
-    cmd_queue(" ".join(rest), timeout, agent, effective_cwd, repeat)
+    cmd_queue(" ".join(rest), timeout, effective_cwd, repeat)
 
   elif subcmd == "result":
     if not rest:
@@ -286,13 +280,13 @@ def main():
     if not rest:
       print("Usage: claude-collide exec <command...>", file=sys.stderr)
       sys.exit(1)
-    cmd_exec(" ".join(rest), timeout, agent, effective_cwd, repeat)
+    cmd_exec(" ".join(rest), timeout, effective_cwd, repeat)
 
   elif subcmd == "status":
     cmd_status()
 
   elif subcmd == "reset":
-    cmd_reset(agent)
+    cmd_reset()
 
   else:
     print(f"Unknown subcommand: {subcmd}", file=sys.stderr)
