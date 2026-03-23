@@ -3,21 +3,21 @@
 MCP server for tt-device-queue.
 
 Exposes the device queue as MCP tools so Claude Code agents can submit jobs
-and retrieve results without dumb polling. The agent calls device_submit()
-to enqueue a command (returns immediately), then calls device_result() when
+and retrieve results without dumb polling. The agent calls submit()
+to enqueue a command (returns immediately), then calls result() when
 it actually needs the output (blocks until done).
 
 Tools:
-  device_submit  — Submit a command to the device queue. Returns immediately.
+  submit         — Submit a command to the device queue. Returns immediately.
   open_forever   — Submit an intentionally long-running command. Returns immediately.
-  device_job     — Get non-blocking structured status for a job.
-  device_logs    — Read the current output file for a job without blocking.
-  device_power   — Sample board power directly without queueing.
-  device_result  — Wait for a job to finish and return its full output.
-  device_run     — Submit + wait in one call (convenience, blocks until done).
-  device_status  — Show what's running, queued, and recently completed.
-  device_kill    — Gracefully stop a running job, then escalate if needed.
-  device_reset   — Queue a device reset (tt-smi -r).
+  job            — Get non-blocking structured status for a job.
+  logs           — Read the current output file for a job without blocking.
+  power          — Sample board power directly without queueing.
+  result         — Wait for a job to finish and return its full output.
+  run            — Submit + wait in one call (convenience, blocks until done).
+  status         — Show what's running, queued, and recently completed.
+  kill           — Gracefully stop a running job, then escalate if needed.
+  reset          — Queue a device reset (tt-smi -r).
 
 Talks to the existing tt-device-queue HTTP server on localhost:5741.
 """
@@ -67,8 +67,8 @@ async def _get(path: str) -> dict:
     return await asyncio.to_thread(get, BASE, path)
 
 
-@server.tool()
-async def device_submit(
+@server.tool(name="submit")
+async def submit(
     cmd: str,
     cwd: str = "",
     timeout: int = DEFAULT_TIMEOUT,
@@ -80,9 +80,9 @@ async def device_submit(
     scripts using ttnn/tt-metal/CUDA, pytest, benchmarks, tt-smi, etc.). Other
     agents may be using the device — the queue prevents conflicts.
 
-    Returns immediately. Call device_result(job_id) when you need the output.
+    Returns immediately. Call result(job_id) when you need the output.
     Do other work (read files, write code, plan) in the meantime. If you have
-    nothing else to do, use device_run() instead.
+    nothing else to do, use run() instead.
 
     Args:
         cmd: Shell command to run (e.g. "pytest tests/" or "python train.py")
@@ -103,7 +103,7 @@ async def device_submit(
         "estimated_wait_sec": result["estimated_wait_sec"],
         "estimated_run_sec": result.get("estimated_run_sec"),
         "repeat": repeat,
-        "hint": "Call device_result(job_id) when you need the output. Repeat runs still use one job_id and append into one output file.",
+        "hint": "Call result(job_id) when you need the output. Repeat runs still use one job_id and append into one output file.",
     }, indent=2)
 
 
@@ -117,9 +117,9 @@ async def open_forever(
 
     Use this for commands that launch a local web UI or keep streaming logs
     for a while. The queue slot remains occupied until the
-    process exits or you call device_kill(job_id). Do NOT call device_result()
-    right away for these jobs; inspect them with device_job(job_id) and
-    device_logs(job_id, offset, limit) while they are alive.
+    process exits or you call kill(job_id). Do NOT call result() right away
+    for these jobs; inspect them with job(job_id) and logs(job_id, offset,
+    limit) while they are alive.
 
     Args:
         cmd: Shell command to run and keep open
@@ -139,34 +139,34 @@ async def open_forever(
         "estimated_run_sec": result.get("estimated_run_sec"),
         "mode": result.get("mode", "open"),
         "timeout": result.get("timeout", timeout),
-        "hint": "This job keeps the queue blocked while it runs. Use device_job/device_logs to monitor it, then call device_kill(job_id) when done.",
+        "hint": "This job keeps the queue blocked while it runs. Use job/logs to monitor it, then call kill(job_id) when done.",
     }, indent=2)
 
 
-@server.tool()
-async def device_job(job_id: str) -> str:
+@server.tool(name="job")
+async def job(job_id: str) -> str:
     """Get structured status for a queued, running, or completed job.
 
     This is non-blocking and is the preferred way to poll long-running jobs,
     including repeated runs, without waiting for the final result.
 
     Args:
-        job_id: The job_id returned by device_submit()
+        job_id: The job_id returned by submit()
     """
     result = await _get(f"/job/{job_id}")
 
     return json.dumps(result, indent=2)
 
 
-@server.tool()
-async def device_logs(job_id: str, offset: int = 0, limit: int = 16384) -> str:
+@server.tool(name="logs")
+async def logs(job_id: str, offset: int = 0, limit: int = 16384) -> str:
     """Read a chunk of the current output for a job without blocking.
 
     This is useful for long-running jobs where you want live logs while polling
-    device_job(job_id) for structured status.
+    job(job_id) for structured status.
 
     Args:
-        job_id: The job_id returned by device_submit()
+        job_id: The job_id returned by submit()
         offset: Byte offset to start reading from
         limit: Maximum bytes to read in one call (capped server-side)
     """
@@ -175,8 +175,8 @@ async def device_logs(job_id: str, offset: int = 0, limit: int = 16384) -> str:
     return json.dumps(result, indent=2)
 
 
-@server.tool()
-async def device_power() -> str:
+@server.tool(name="power")
+async def power() -> str:
     """Sample board power directly for 3 seconds without using the queue.
 
     This tool is safe to run concurrently and does not consume a queue slot.
@@ -185,8 +185,8 @@ async def device_power() -> str:
     return await asyncio.to_thread(run_power_watch, REPO_ROOT, POWER_WATCH)
 
 
-@server.tool()
-async def device_result(job_id: str) -> str:
+@server.tool(name="result")
+async def result(job_id: str) -> str:
     """Wait for a previously submitted device job to finish and return its
     full output. Blocks until the job completes.
 
@@ -195,7 +195,7 @@ async def device_result(job_id: str) -> str:
     and call this after — the job runs in the background regardless.
 
     Args:
-        job_id: The job_id returned by device_submit()
+        job_id: The job_id returned by submit()
     """
     result = await _wait_for_job(job_id)
 
@@ -213,8 +213,8 @@ async def device_result(job_id: str) -> str:
     return "\n".join(lines)
 
 
-@server.tool()
-async def device_run(
+@server.tool(name="run")
+async def run(
     cmd: str,
     cwd: str = "",
     timeout: int = DEFAULT_TIMEOUT,
@@ -227,8 +227,8 @@ async def device_run(
     agents may be using the device — the queue prevents conflicts.
 
     Blocks until done. Use this when you have nothing else to do while waiting.
-    If you want to do other work while the command runs, use device_submit()
-    instead and call device_result() later.
+    If you want to do other work while the command runs, use submit()
+    instead and call result() later.
 
     Args:
         cmd: Shell command to run (e.g. "pytest tests/" or "python train.py")
@@ -260,8 +260,8 @@ async def device_run(
     return "\n".join(lines)
 
 
-@server.tool()
-async def device_status() -> str:
+@server.tool(name="status")
+async def status() -> str:
     """Show what's currently running, queued, and recently completed on the device.
     Use this to check if the device is busy before submitting work, or to see
     the history of recent jobs."""
@@ -311,8 +311,8 @@ async def device_status() -> str:
     return "\n".join(lines)
 
 
-@server.tool()
-async def device_kill(job_id: str = "") -> str:
+@server.tool(name="kill")
+async def kill(job_id: str = "") -> str:
     """Stop a running device job, sending Ctrl+C first and escalating only if
     it refuses to exit.
 
@@ -336,8 +336,8 @@ async def device_kill(job_id: str = "") -> str:
 TT_SMI = os.path.expanduser("~/tenstorrent/.venv/bin/tt-smi")
 
 
-@server.tool()
-async def device_reset(device: int = 0) -> str:
+@server.tool(name="reset")
+async def reset(device: int = 0) -> str:
     """Reset the Tenstorrent device via tt-smi. Queued through the FIFO like
     any other command — waits for running jobs to finish first, then resets.
 

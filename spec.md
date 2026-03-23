@@ -184,24 +184,24 @@ Behavior:
 
 Implemented tools in `mcp_server.py`:
 
-- `device_submit(cmd, cwd, timeout, repeat)`
+- `submit(cmd, cwd, timeout, repeat)`
 - `open_forever(cmd, cwd, timeout)`
-- `device_job(job_id)`
-- `device_logs(job_id, offset, limit)`
-- `device_power()`
-- `device_result(job_id)`
-- `device_run(cmd, cwd, timeout, repeat)`
-- `device_status()`
-- `device_kill(job_id="")`
-- `device_reset(device=0)`
+- `job(job_id)`
+- `logs(job_id, offset, limit)`
+- `power()`
+- `result(job_id)`
+- `run(cmd, cwd, timeout, repeat)`
+- `status()`
+- `kill(job_id="")`
+- `reset(device=0)`
 
 MCP behavior notes:
 
 - Queue-backed tools call the HTTP server through shared code in `queue_client.py`.
-- `device_result` waits until completion, then returns the full output text.
-- `device_run` is submit + wait.
-- `device_power` does not use the queue and can run concurrently with queued jobs.
-- `device_reset` is queued work; it is not a direct bypass path.
+- `result` waits until completion, then returns the full output text.
+- `run` is submit + wait.
+- `power` does not use the queue and can run concurrently with queued jobs.
+- `reset` is queued work; it is not a direct bypass path.
 
 ## CLI Surface
 
@@ -286,5 +286,5 @@ Implemented tests cover:
 - No authentication or remote access controls beyond binding to localhost by default
 - No queue prioritization; ordering is strict FIFO
 - No cancellation of queued-but-not-yet-running jobs
-- No streaming MCP transport for partial `device_result` output
+- No streaming MCP transport for partial `result` output
 - No server-side enforcement that a command actually targets device hardware

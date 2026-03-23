@@ -18,34 +18,34 @@ AI coding agents cannot use `flock` correctly. They forget the lock, release it 
 ┌─────────────┐    stdio/MCP     ┌────────────────┐    HTTP     ┌────────────┐
 │  AI Agent   │ ◄──────────────► │  mcp_server.py │ ──────────► │ server.py  │
 │  (claude,   │                  │                │             │ :5741      │
-│   codex,    │                  │  device_submit │             │            │
-│   opencode) │                  │  device_result │             │  FIFO      │──► shared
-│             │                  │  device_run    │             │  worker    │    resource
-│             │                  │  device_status │             │            │
-└─────────────┘                  │  device_reset  │             └────────────┘
+│   codex,    │                  │  submit        │             │            │
+│   opencode) │                  │  result        │             │  FIFO      │──► shared
+│             │                  │  run           │             │  worker    │    resource
+│             │                  │  status        │             │            │
+└─────────────┘                  │  reset         │             └────────────┘
                                  └────────────────┘
 ```
 
-The MCP server enables an **async two-tool pattern**: the agent calls `device_submit` to enqueue a command (returns immediately), does other work (reads files, writes code, plans), then calls `device_result` when it actually needs the output. This avoids blocking the agent during device execution.
+The MCP server enables an **async two-tool pattern**: the agent calls `submit` to enqueue a command (returns immediately), does other work (reads files, writes code, plans), then calls `result` when it actually needs the output. This avoids blocking the agent during device execution.
 
 ## MCP Tools
 
 | Tool | Blocks? | Description |
 |---|---|---|
-| `device_submit(cmd, cwd, timeout, repeat)` | No | Enqueue a command, get back a `job_id` immediately |
+| `submit(cmd, cwd, timeout, repeat)` | No | Enqueue a command, get back a `job_id` immediately |
 | `open_forever(cmd, cwd, timeout)` | No | Enqueue an intentionally long-running job that keeps the queue occupied until stopped |
-| `device_job(job_id)` | No | Fetch structured per-job status, timestamps, repeat progress, and queue position |
-| `device_logs(job_id, offset, limit)` | No | Read the current output file for a job without blocking |
-| `device_power()` | No | Sample board power for 3 seconds without consuming a queue slot |
-| `device_result(job_id)` | Yes | Wait for a job to finish, return full output |
-| `device_run(cmd, cwd, timeout, repeat)` | Yes | Submit + wait in one call (convenience) |
-| `device_status()` | No | Show running, queued, and recent jobs |
-| `device_kill(job_id="")` | No | Stop the running job, sending Ctrl+C first and force-killing only if needed |
-| `device_reset()` | No | Queue a device reset command |
+| `job(job_id)` | No | Fetch structured per-job status, timestamps, repeat progress, and queue position |
+| `logs(job_id, offset, limit)` | No | Read the current output file for a job without blocking |
+| `power()` | No | Sample board power for 3 seconds without consuming a queue slot |
+| `result(job_id)` | Yes | Wait for a job to finish, return full output |
+| `run(cmd, cwd, timeout, repeat)` | Yes | Submit + wait in one call (convenience) |
+| `status()` | No | Show running, queued, and recent jobs |
+| `kill(job_id="")` | No | Stop the running job, sending Ctrl+C first and force-killing only if needed |
+| `reset()` | No | Queue a device reset command |
 
-`repeat` defaults to `1`. When set higher, the server runs the same command sequentially inside a single queued job, appends all iterations into the same output file, and still returns one `job_id` for the agent to track. It stops immediately on the first failing iteration and exposes repeat progress through `device_job` and `device_status`. Initial ETA scales with `repeat`, then refines after the first successful iteration by reusing that iteration's runtime as the per-repeat estimate.
+`repeat` defaults to `1`. When set higher, the server runs the same command sequentially inside a single queued job, appends all iterations into the same output file, and still returns one `job_id` for the agent to track. It stops immediately on the first failing iteration and exposes repeat progress through `job` and `status`. Initial ETA scales with `repeat`, then refines after the first successful iteration by reusing that iteration's runtime as the per-repeat estimate.
 
-`open_forever` is for commands that are intentionally meant to stay alive for a while, like local UI/profile servers. These jobs still use the same FIFO queue and stdout file, but they keep the queue slot occupied until they exit or the agent calls `device_kill(job_id)`. The server sends Ctrl+C first and only escalates to SIGKILL if the process ignores it. The default timeout for `open_forever` jobs is 180 seconds.
+`open_forever` is for commands that are intentionally meant to stay alive for a while, like local UI/profile servers. These jobs still use the same FIFO queue and stdout file, but they keep the queue slot occupied until they exit or the agent calls `kill(job_id)`. The server sends Ctrl+C first and only escalates to SIGKILL if the process ignores it. The default timeout for `open_forever` jobs is 180 seconds.
 
 ## Setup
 
