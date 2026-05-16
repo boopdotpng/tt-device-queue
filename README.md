@@ -45,7 +45,7 @@ The MCP server enables an **async two-tool pattern**: the agent calls `submit` t
 
 `repeat` defaults to `1`. When set higher, the server runs the same command sequentially inside a single queued job, appends all iterations into the same output file, and still returns one `job_id` for the agent to track. It stops immediately on the first failing iteration and exposes repeat progress through `job` and `status`. Initial ETA scales with `repeat`, then refines after the first successful iteration by reusing that iteration's runtime as the per-repeat estimate.
 
-`open_forever` is for commands that are intentionally meant to stay alive for a while, like local UI/profile servers. These jobs still use the same FIFO queue and stdout file, but they keep the queue slot occupied until they exit or the agent calls `kill(job_id)`. The server sends Ctrl+C first and only escalates to SIGKILL if the process ignores it. The default timeout for `open_forever` jobs is 180 seconds.
+`open_forever` is for commands that are intentionally meant to stay alive for a while, like local UI/profile servers. These jobs still use the same FIFO queue and stdout file, but they keep the queue slot occupied until they exit or the agent calls `kill(job_id)`. Manual `kill` sends Ctrl+C first and only escalates to SIGKILL if the process ignores it; timeouts send SIGKILL immediately. The default timeout for `open_forever` jobs is 180 seconds.
 
 ## Setup
 

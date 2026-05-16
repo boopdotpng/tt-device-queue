@@ -45,6 +45,15 @@ STOP_GRACE_SEC = 8
 LOG_DIR.mkdir(parents=True, exist_ok=True)
 
 
+def _job_env() -> dict[str, str]:
+  env = os.environ.copy()
+  pythonpath = env.get("PYTHONPATH", "")
+  parts = [part for part in pythonpath.split(os.pathsep) if part]
+  if "." not in parts:
+    env["PYTHONPATH"] = os.pathsep.join(["."] + parts)
+  return env
+
+
 def _format_timestamp(ts: float | None) -> str | None:
   if ts is None:
     return None
@@ -365,6 +374,10 @@ class DeviceQueue:
     proc.wait()
     return False
 
+  def _kill_for_timeout(self, proc: subprocess.Popen):
+    self._send_sigkill(proc)
+    proc.wait()
+
   def _wait_for_process(self, job: Job, proc: subprocess.Popen, deadline: float | None) -> int:
     while True:
       timeout_remaining = None
@@ -444,6 +457,7 @@ class DeviceQueue:
               f"exec {job.cmd}", shell=True, executable="/bin/bash",
               stdout=out_f, stderr=subprocess.STDOUT,
               cwd=job.cwd or None,
+              env=_job_env(),
               start_new_session=True,  # own process group for clean kills
             )
             with self._lock:
@@ -452,12 +466,9 @@ class DeviceQueue:
             try:
               exit_code = self._wait_for_process(job, proc, deadline)
             except subprocess.TimeoutExpired:
-              stopped_cleanly = self._interrupt_then_kill(proc)
+              self._kill_for_timeout(proc)
               exit_code = -9
-              if stopped_cleanly:
-                out_f.write(f"\n[claude-collide] Timed out after {job.timeout}s — sent Ctrl+C\n")
-              else:
-                out_f.write(f"\n[claude-collide] Timed out after {job.timeout}s — sent Ctrl+C, then SIGKILL after {STOP_GRACE_SEC}s\n")
+              out_f.write(f"\n[claude-collide] Timed out after {job.timeout}s — sent SIGKILL\n")
             finally:
               out_f.flush()
 

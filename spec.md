@@ -46,8 +46,8 @@ Each queued job has:
 - Before each repeated iteration, the server appends a marker line:
   - `[claude-collide] Repeat N/M`
 - If any iteration exits non-zero, the job stops immediately and later iterations are not run.
-- If the job times out, the server sends Ctrl+C to the process group first, waits briefly, then escalates to `SIGKILL` if needed. Timed-out jobs end with exit code `-9`.
-- Explicit stop requests use the same Ctrl+C-then-`SIGKILL` escalation path.
+- If the job times out, the server sends `SIGKILL` to the process group immediately. Timed-out jobs end with exit code `-9`.
+- Explicit stop requests send Ctrl+C first, then escalate to `SIGKILL` if needed.
 - Timeout applies to the full repeated job, not to each iteration independently.
 
 ## Output and Metadata Files

@@ -28,6 +28,7 @@ class QueueServerTest(unittest.TestCase):
     env = os.environ.copy()
     env["TT_DEVICE_PORT"] = str(self.port)
     env["TT_DEVICE_LOG_DIR"] = self.temp_dir.name
+    env.pop("PYTHONPATH", None)
     self.server = subprocess.Popen(
       [sys.executable, str(SERVER_PATH)],
       cwd=REPO_ROOT,
@@ -169,12 +170,23 @@ class QueueServerTest(unittest.TestCase):
     result = self.wait_for_done(submit["job_id"])
     self.assertEqual(result["exit_code"], -9)
     self.assertEqual(result["repeat_completed"], 0)
+    self.assertLess(result["elapsed"], 3)
 
     logs = self.get_json(f"/logs/{submit['job_id']}?offset=0&limit=4096")
     self.assertIn("Repeat 1/3", logs["content"])
     self.assertNotIn("Repeat 2/3", logs["content"])
     self.assertIn("Timed out after 1s", logs["content"])
-    self.assertIn("Ctrl+C", logs["content"])
+    self.assertIn("SIGKILL", logs["content"])
+
+  def test_queued_command_gets_pythonpath_dot(self):
+    code = "import os; print(os.environ.get('PYTHONPATH'))"
+    submit = self.submit(self.python_cmd(code), timeout=5)
+
+    result = self.wait_for_done(submit["job_id"])
+    self.assertEqual(result["exit_code"], 0)
+
+    logs = self.get_json(f"/logs/{submit['job_id']}?offset=0&limit=4096")
+    self.assertIn(".\n", logs["content"])
 
   def test_job_endpoint_reports_queue_running_and_done_metadata(self):
     first = self.submit("sleep 1", timeout=5)
@@ -336,7 +348,7 @@ class QueueServerTest(unittest.TestCase):
     result = self.wait_for_done(submit["job_id"], timeout=15)
     self.assertEqual(result["exit_code"], -9)
 
-  def test_open_job_timeout_uses_sigint_then_kill_if_needed(self):
+  def test_open_job_timeout_uses_sigkill(self):
     code = (
       "import signal, time; "
       "signal.signal(signal.SIGINT, signal.SIG_IGN); "
@@ -346,10 +358,11 @@ class QueueServerTest(unittest.TestCase):
     submit = self.submit_open(self.python_cmd(code), timeout=1)
     result = self.wait_for_done(submit["job_id"], timeout=12)
     self.assertEqual(result["exit_code"], -9)
+    self.assertLess(result["elapsed"], 3)
 
     logs = self.get_json(f"/logs/{submit['job_id']}?offset=0&limit=4096")
     self.assertIn("Timed out after 1s", logs["content"])
-    self.assertIn("Ctrl+C", logs["content"])
+    self.assertIn("SIGKILL", logs["content"])
 
 
 if __name__ == "__main__":
