@@ -10,7 +10,7 @@ It is intended to be the source of truth for feature scope and runtime semantics
   - an HTTP queue server in `server.py`
   - an MCP wrapper in `mcp_server.py`
   - a shell CLI in `claude-collide`
-- Provide one direct non-queued power-sampling path via `power_watch.py`.
+- Provide one direct non-queued power telemetry path via `tt-smi.py --snapshot`.
 
 ## Process Model
 
@@ -188,7 +188,7 @@ Implemented tools in `mcp_server.py`:
 - `open_forever(cmd, cwd, timeout)`
 - `job(job_id)`
 - `logs(job_id, offset, limit)`
-- `power()`
+- `tt_smi_status()`
 - `result(job_id)`
 - `run(cmd, cwd, timeout, repeat)`
 - `status()`
@@ -200,7 +200,7 @@ MCP behavior notes:
 - Queue-backed tools call the HTTP server through shared code in `queue_client.py`.
 - `result` waits until completion, then returns the full output text.
 - `run` is submit + wait.
-- `power` does not use the queue and can run concurrently with queued jobs.
+- `tt_smi_status` does not use the queue and can run concurrently with queued jobs.
 - `reset` is queued work; it is not a direct bypass path.
 
 ## CLI Surface
@@ -211,7 +211,7 @@ Implemented subcommands in `claude-collide`:
 - `open <command...>`
 - `job <job_id>`
 - `logs <job_id> [offset] [limit]`
-- `power`
+- `tt-smi-status`
 - `result <job_id>`
 - `exec <command...>`
 - `kill [job_id]`
@@ -228,7 +228,7 @@ Global CLI options:
 CLI behavior notes:
 
 - CLI queue/status behavior is intended to mirror the MCP-visible queue behavior.
-- CLI `power` runs the same direct power sampler used by MCP.
+- CLI `tt-smi-status` runs the same direct tt-smi snapshot used by MCP.
 - CLI `kill` maps to HTTP `POST /kill`.
 
 ## Shared Client Layer
@@ -238,25 +238,19 @@ CLI behavior notes:
 - HTTP GET/POST with uniform error translation
 - blocking wait/poll loop for jobs
 - output-file reading for completed results
-- direct `uv run power_watch.py` invocation
+- direct `~/tenstorrent/blackhole-py/tt-smi.py --snapshot` invocation
 
 This file exists to keep CLI and MCP behavior aligned without making the CLI depend on MCP transport.
 
-## Power Sampling
+## TT-SMI Status
 
-`power_watch.py` implements a short direct telemetry sample:
+The `tt_smi_status` path invokes the same `tt-smi.py` file used for reset:
 
-- duration: `3.0s`
-- sample interval: `0.2s`
-- source: `pyluwen.detect_chips(local_only=True)` and Blackhole telemetry
-- output summary includes:
-  - average board watts
-  - minimum board watts
-  - maximum board watts
-  - sample count
-  - board power limit when available
+- command: `~/tenstorrent/blackhole-py/tt-smi.py --snapshot`
+- source: Blackhole PCIe telemetry as rendered by `tt-smi`
+- output includes the snapshot's thermals, power, clocks, status, and raw telemetry
 
-If no Blackhole chip is found or telemetry fails, the script exits non-zero.
+If no Blackhole PCIe device is found or telemetry fails, the command exits non-zero.
 
 ## Installation and Service Behavior
 
@@ -278,7 +272,7 @@ Implemented tests cover:
 - log chunk reading with offsets and completion detection
 - repeat-aware ETA initialization and refinement after first iteration
 - `repeat` defaulting to `1`
-- power summary formatting in `power_watch.py`
+- `tt_smi_status` snapshot invocation and error handling in `queue_client.py`
 
 ## Not Guaranteed by the Current Implementation
 

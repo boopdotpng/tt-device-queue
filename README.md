@@ -22,6 +22,7 @@ AI coding agents cannot use `flock` correctly. They forget the lock, release it 
 │   opencode) │                  │  result        │             │  FIFO      │──► shared
 │             │                  │  run           │             │  worker    │    resource
 │             │                  │  status        │             │            │
+│             │                  │  tt_smi_status │             │            │
 └─────────────┘                  │  reset         │             └────────────┘
                                  └────────────────┘
 ```
@@ -36,7 +37,7 @@ The MCP server enables an **async two-tool pattern**: the agent calls `submit` t
 | `open_forever(cmd, cwd, timeout)` | No | Enqueue an intentionally long-running job that keeps the queue occupied until stopped |
 | `job(job_id)` | No | Fetch structured per-job status, timestamps, repeat progress, and queue position |
 | `logs(job_id, offset, limit)` | No | Read the current output file for a job without blocking |
-| `power()` | No | Sample board power for 3 seconds without consuming a queue slot |
+| `tt_smi_status()` | No | Print a one-shot `tt-smi --snapshot` telemetry view without consuming a queue slot |
 | `result(job_id)` | Yes | Wait for a job to finish, return full output |
 | `run(cmd, cwd, timeout, repeat)` | Yes | Submit + wait in one call (convenience) |
 | `status()` | No | Show running, queued, and recent jobs |
@@ -132,8 +133,8 @@ claude-collide job <job_id>
 # Stream the current output file in chunks
 claude-collide logs <job_id> [offset] [limit]
 
-# Sample board power directly without queueing
-claude-collide power
+# Print a tt-smi telemetry snapshot directly without queueing
+claude-collide tt-smi-status
 
 # Check result
 claude-collide result <job_id>

@@ -7,7 +7,7 @@ Usage:
   claude-collide open <command...>                 Submit a long-running open job
   claude-collide job <job_id>                      Show structured job status
   claude-collide logs <job_id> [offset] [limit]   Read current job logs
-  claude-collide power                             Sample board power directly
+  claude-collide tt-smi-status                     Print tt-smi telemetry directly
   claude-collide result <job_id>                   Check if a job is done
   claude-collide exec <command...>                 Submit + block until done
   claude-collide kill [job_id]                     Stop a running job with Ctrl+C first
@@ -31,17 +31,14 @@ import json
 import os
 import sys
 import time
-from pathlib import Path
 
-from queue_client import QueueClientError, get, post, run_power_watch
+from queue_client import QueueClientError, get, post, run_tt_smi_snapshot
 
 HOST = "127.0.0.1"
 PORT = int(os.environ.get("TT_DEVICE_PORT", "5741"))
 DEFAULT_TIMEOUT = 120
 DEFAULT_OPEN_TIMEOUT = 180
 BASE = f"http://{HOST}:{PORT}"
-REPO_ROOT = Path(__file__).resolve().parent
-POWER_WATCH = REPO_ROOT / "power_watch.py"
 
 def http_post(path, data):
   try:
@@ -117,9 +114,9 @@ def cmd_logs(job_id: str, offset: int = 0, limit: int = 16384):
     print(f"\n[claude-collide] More logs available; next_offset={data.get('next_offset')}", file=sys.stderr)
 
 
-def cmd_power():
+def cmd_tt_smi_status():
   try:
-    print(run_power_watch(REPO_ROOT, POWER_WATCH))
+    print(run_tt_smi_snapshot())
   except QueueClientError as exc:
     print(f"ERROR: {exc}", file=sys.stderr)
     sys.exit(1)
@@ -312,8 +309,8 @@ def main():
     limit = int(rest[2]) if len(rest) > 2 else 16384
     cmd_logs(rest[0], offset, limit)
 
-  elif subcmd == "power":
-    cmd_power()
+  elif subcmd in ("tt-smi-status", "tt_smi_status"):
+    cmd_tt_smi_status()
 
   elif subcmd == "exec":
     if not rest:

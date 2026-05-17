@@ -12,6 +12,9 @@ class QueueClientError(Exception):
   pass
 
 
+DEFAULT_TT_SMI = Path("~/tenstorrent/blackhole-py/tt-smi.py").expanduser()
+
+
 def read_output_file(output_file: str) -> str:
   if not output_file:
     return ""
@@ -75,15 +78,19 @@ def wait_for_job(base: str, job_id: str, poll_interval: float = 0.5) -> dict:
     interval = min(interval * 2, poll_interval)
 
 
-def run_power_watch(repo_root: Path, power_watch: Path) -> str:
+def run_tt_smi_snapshot(tt_smi: Path = DEFAULT_TT_SMI, device: int | None = None) -> str:
+  cmd = [str(tt_smi), "--snapshot"]
+  if device is not None:
+    cmd.append(str(device))
+
   proc = subprocess.run(
-    ["uv", "run", str(power_watch)],
-    cwd=str(repo_root),
+    cmd,
+    cwd=str(tt_smi.parent),
     capture_output=True,
     text=True,
   )
   output = proc.stdout.strip()
   error = proc.stderr.strip()
   if proc.returncode != 0:
-    raise QueueClientError(error or output or "power sampling failed")
+    raise QueueClientError(error or output or "tt-smi snapshot failed")
   return output

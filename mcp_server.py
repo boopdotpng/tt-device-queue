@@ -12,7 +12,7 @@ Tools:
   open_forever   — Submit an intentionally long-running command. Returns immediately.
   job            — Get non-blocking structured status for a job.
   logs           — Read the current output file for a job without blocking.
-  power          — Sample board power directly without queueing.
+  tt_smi_status  — Print tt-smi telemetry directly without queueing.
   result         — Wait for a job to finish and return its full output.
   run            — Submit + wait in one call (convenience, blocks until done).
   status         — Show what's running, queued, and recently completed.
@@ -25,19 +25,16 @@ Talks to the existing tt-device-queue HTTP server on localhost:5741.
 import asyncio
 import json
 import os
-from pathlib import Path
 
 from mcp.server.fastmcp import FastMCP
 
-from queue_client import QueueClientError, post, get, run_power_watch, wait_for_job
+from queue_client import QueueClientError, post, get, run_tt_smi_snapshot, wait_for_job
 
 HOST = "127.0.0.1"
 PORT = int(os.environ.get("TT_DEVICE_PORT", "5741"))
 BASE = f"http://{HOST}:{PORT}"
 DEFAULT_TIMEOUT = 60
 DEFAULT_OPEN_TIMEOUT = 180
-REPO_ROOT = Path(__file__).resolve().parent
-POWER_WATCH = REPO_ROOT / "power_watch.py"
 
 # Poll interval when waiting for job completion — tight because it's localhost
 POLL_INTERVAL = 0.5
@@ -175,14 +172,14 @@ async def logs(job_id: str, offset: int = 0, limit: int = 16384) -> str:
     return json.dumps(result, indent=2)
 
 
-@server.tool(name="power")
-async def power() -> str:
-    """Sample board power directly for 3 seconds without using the queue.
+@server.tool(name="tt_smi_status")
+async def tt_smi_status() -> str:
+    """Print a one-shot tt-smi telemetry snapshot without using the queue.
 
     This tool is safe to run concurrently and does not consume a queue slot.
-    It returns average, minimum, and maximum total board power in watts.
+    The snapshot includes power telemetry such as TDP and board power limit.
     """
-    return await asyncio.to_thread(run_power_watch, REPO_ROOT, POWER_WATCH)
+    return await asyncio.to_thread(run_tt_smi_snapshot)
 
 
 @server.tool(name="result")
