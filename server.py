@@ -33,8 +33,10 @@ Endpoints:
   GET  /status  -> {"current", "pending", "recent", "device"}
 """
 
+import contextlib
 import json
 import os
+import resource
 import select
 import signal
 import sqlite3
@@ -144,10 +146,23 @@ class JobStore:
     self._init_schema()
     self.mark_abandoned_jobs()
 
-  def _connect(self) -> sqlite3.Connection:
+  @contextlib.contextmanager
+  def _connect(self):
+    """Yield a connection wrapped in a transaction, always closing it.
+
+    NOTE: `with sqlite3.connect(...)` only manages the transaction — it does
+    NOT close the connection. On Python >= 3.13 an unclosed connection is no
+    longer closed when garbage collected (it just emits a ResourceWarning), so
+    every connection MUST be closed explicitly or the process leaks one fd per
+    DB operation until it hits RLIMIT_NOFILE ("Too many open files").
+    """
     conn = sqlite3.connect(self.db_path, timeout=30)
     conn.row_factory = sqlite3.Row
-    return conn
+    try:
+      with conn:
+        yield conn
+    finally:
+      conn.close()
 
   def _init_schema(self):
     with self._connect() as conn:
@@ -912,8 +927,12 @@ class DeviceQueue:
       time.sleep(timeout)
       return
     fd = proc.stdout.fileno()
-    readable, _, _ = select.select([fd], [], [], timeout)
-    if not readable:
+    # select.poll() instead of select.select(): select() raises ValueError for
+    # fds >= 1024 (FD_SETSIZE), which would wedge output draining under fd
+    # pressure or with a raised RLIMIT_NOFILE.
+    poller = select.poll()
+    poller.register(fd, select.POLLIN)
+    if not poller.poll(max(0, int(timeout * 1000))):
       return
     self._drain_process_output(job, proc, out_f)
 
@@ -1187,8 +1206,13 @@ class DeviceQueue:
               self._store.save_job(job)
       except Exception as e:
         exit_code = -1
-        with open(job.output_file, "ab") as f:
-          self._append_output(job, f, f"\n[tt-device-queue] Error: {e}\n".encode())
+        # Never let error reporting kill the worker thread (e.g. when the
+        # error itself is fd exhaustion and opening the log file also fails).
+        try:
+          with open(job.output_file, "ab") as f:
+            self._append_output(job, f, f"\n[tt-device-queue] Error: {e}\n".encode())
+        except Exception as log_exc:
+          print(f"[{job.id}] Error: {e} (and failed to record it: {log_exc})")
 
       elapsed = round(time.time() - job.started_at, 2)
 
@@ -1203,6 +1227,15 @@ class DeviceQueue:
         self._store.save_job(job)
 
       # Write metadata alongside output
+      try:
+        self._write_meta(job, exit_code, elapsed)
+      except OSError as exc:
+        print(f"[{job.id}] Failed to write meta.json: {exc}")
+
+      status = "OK" if exit_code == 0 else f"FAIL({exit_code})"
+      print(f"[{job.id}] {status} in {elapsed}s -> {job.output_file}")
+
+  def _write_meta(self, job: Job, exit_code: int, elapsed: float):
       meta_path = Path(job.output_file).parent / "meta.json"
       with open(meta_path, "w") as f:
         json.dump({
@@ -1216,9 +1249,6 @@ class DeviceQueue:
           "finished": _format_timestamp(job.finished_at),
           "output_file": job.output_file,
         }, f, indent=2)
-
-      status = "OK" if exit_code == 0 else f"FAIL({exit_code})"
-      print(f"[{job.id}] {status} in {elapsed}s -> {job.output_file}")
 
 
 dq = DeviceQueue(JobStore(DB_PATH))
@@ -1443,7 +1473,19 @@ class Handler(BaseHTTPRequestHandler):
     self._json_response(404, {"error": "Not found"})
 
 
+def _raise_nofile_limit(target: int = 65536):
+  """Raise the soft RLIMIT_NOFILE (often 1024 under systemd) toward `target`."""
+  try:
+    soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
+    wanted = target if hard == resource.RLIM_INFINITY else min(hard, target)
+    if soft < wanted:
+      resource.setrlimit(resource.RLIMIT_NOFILE, (wanted, hard))
+  except (ValueError, OSError) as exc:
+    print(f"Could not raise RLIMIT_NOFILE: {exc}")
+
+
 def main():
+  _raise_nofile_limit()
   # Start worker thread
   worker = threading.Thread(target=dq.worker_loop, daemon=True)
   worker.start()
