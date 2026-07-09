@@ -49,7 +49,8 @@ It is intended to be the source of truth for feature scope and runtime semantics
   - job's epoch < current epoch -> `already_reset` (no new reset; resubmit)
   - reset pending or in progress -> `joined`
   - otherwise -> `scheduled` (the worker runs it before dispatching more jobs)
-- The currently running job is allowed to finish (bounded by the run timeout);
+- The currently running job is allowed to finish (bounded by the run timeout,
+  when one is configured);
   the reset runs before the next dispatch.
 - Reset reports record `last_breakage`, exposed in `/reset`, `/status`, and
   `/breakage`. The suspected culprit is the reported `job_id` when provided,
@@ -81,7 +82,7 @@ Each queued job has:
 - `job_id`: 8 hex chars, unique per server lifetime
 - `cmd`: shell command string executed with `shell=True`
 - `cwd`: working directory passed to `subprocess.Popen`
-- `timeout`: total timeout budget for the whole job, capped at 25 seconds
+- `timeout`: total timeout budget for the whole job; `0` means no timeout
 - `repeat`: number of sequential executions inside the same job, minimum `1`
 - `env`: per-job environment variables merged into the subprocess environment
 - `mode`: `run` for normal jobs, `reset` for server-managed device resets
@@ -104,7 +105,7 @@ Each queued job has:
 - If the job times out, the server sends `SIGKILL` to the process group immediately. Timed-out jobs end with exit code `-9`.
 - Explicit stop requests send Ctrl+C first, then escalate to `SIGKILL` if needed.
 - Timeout applies to the full repeated job, not to each iteration independently.
-- MCP queue tools do not expose a timeout argument; all submitted commands use the 25 second cap.
+- MCP queue tools do not expose a timeout argument; submitted MCP commands run without a timeout.
 
 ## Output and Metadata Files
 
@@ -148,7 +149,7 @@ Behavior:
 - `cmd` is required and must be non-empty after stripping.
 - `repeat` must be `>= 1`.
 - `mode` defaults to `run`; new submissions must use `run`.
-- `timeout` is optional for raw HTTP callers, but values above 25 seconds are capped to 25 seconds. MCP callers cannot set it.
+- `timeout` is optional for raw HTTP callers; omitted or `0` means no timeout. MCP callers cannot set it.
 - `env` defaults to `{}` and must be an object whose names and values are strings.
 - `client_id` defaults to `anon`; must be a non-empty string of at most 128 chars.
 - Returns HTTP 503 with the reboot-required message when the device is dead.

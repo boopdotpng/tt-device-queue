@@ -17,7 +17,6 @@ from queue_client import post, get, wait_for_job
 HOST = "127.0.0.1"
 PORT = int(os.environ.get("TT_DEVICE_PORT", "5741"))
 BASE = f"http://{HOST}:{PORT}"
-RUN_TIMEOUT = 25
 
 # One MCP server process == one agent session. This id is the fairness unit:
 # the queue server round-robins across client ids so no agent can dominate.
@@ -69,7 +68,7 @@ async def queue(
 ) -> str:
     """Queue device command. Returns job_id. PYTHONPATH includes "."."""
     result = await _post("/queue", {
-        "cmd": cmd, "cwd": cwd, "timeout": RUN_TIMEOUT, "repeat": repeat,
+        "cmd": cmd, "cwd": cwd, "repeat": repeat,
         "mode": "run", "client_id": CLIENT_ID,
     })
 
@@ -96,7 +95,7 @@ async def queue_python(
     script_path = await asyncio.to_thread(_write_python_script, script)
     cmd = shlex.join([python, str(script_path), *(args or [])])
     result = await _post("/queue", {
-        "cmd": cmd, "cwd": cwd, "timeout": RUN_TIMEOUT, "repeat": repeat,
+        "cmd": cmd, "cwd": cwd, "repeat": repeat,
         "mode": "run", "client_id": CLIENT_ID,
     })
 

@@ -49,7 +49,7 @@ device.
 
 `repeat` defaults to `1`. When set higher, the server runs the same command sequentially inside a single queued job, appends all iterations into the same output file, and still returns one `job_id` for the agent to track. It stops immediately on the first failing iteration and exposes repeat progress through `job` and `status`. Initial ETA scales with `repeat`, then refines after the first successful iteration by reusing that iteration's runtime as the per-repeat estimate.
 
-Every queued command has a hard timeout cap of 25 seconds. MCP callers cannot set a timeout. If a command hits the cap, `result(job_id)` starts with `Status: TIMED OUT`, `/result` and `/job` return `timed_out: true` plus `timeout_message`, and the job log contains the timeout message.
+Queued commands do not have a default timeout. Raw HTTP callers may set `timeout`; MCP callers cannot set one. If a command hits an explicit timeout, `result(job_id)` starts with `Status: TIMED OUT`, `/result` and `/job` return `timed_out: true` plus `timeout_message`, and the job log contains the timeout message.
 
 The server automatically prepends `.` to `PYTHONPATH` for queued jobs, so agents do not need to add `PYTHONPATH=.`. Normal leading shell assignments such as `MATMUL_PROFILE=1 python3 examples/matmul_peak.py` work as expected.
 

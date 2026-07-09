@@ -35,7 +35,6 @@ class McpQueueTest(unittest.IsolatedAsyncioTestCase):
     mock_post.assert_awaited_once_with("/queue", {
       "cmd": "python test.py",
       "cwd": "/repo",
-      "timeout": 25,
       "repeat": 3,
       "mode": "run",
       "client_id": mcp_server.CLIENT_ID,
@@ -80,23 +79,23 @@ class McpQueueTest(unittest.IsolatedAsyncioTestCase):
       cmd_parts = shlex.split(payload["cmd"])
       self.assertEqual(cmd_parts, ["python3", str(script_file), "--flag"])
       self.assertEqual(payload["cwd"], "/repo")
-      self.assertEqual(payload["timeout"], 25)
+      self.assertNotIn("timeout", payload)
       self.assertEqual(payload["mode"], "run")
       self.assertEqual(payload["client_id"], mcp_server.CLIENT_ID)
 
   async def test_result_makes_timeout_obvious(self):
     with patch("mcp_server._wait_for_job", new=AsyncMock(return_value={
       "exit_code": -9,
-      "elapsed": 25.03,
+      "elapsed": 90.03,
       "output_file": "/tmp/output",
-      "output": "[tt-device-queue] Command timed out after 25s; the queue sent SIGKILL.",
+      "output": "[tt-device-queue] Command timed out after 90s; the queue sent SIGKILL.",
       "timed_out": True,
-      "timeout_message": "Command timed out after 25s; the queue sent SIGKILL.",
+      "timeout_message": "Command timed out after 90s; the queue sent SIGKILL.",
     })):
       response = await mcp_server.result("job123")
 
     self.assertIn("Status: TIMED OUT", response)
-    self.assertIn("Command timed out after 25s", response)
+    self.assertIn("Command timed out after 90s", response)
 
 
 class McpResetTest(unittest.IsolatedAsyncioTestCase):

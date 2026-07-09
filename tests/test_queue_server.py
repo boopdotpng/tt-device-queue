@@ -478,16 +478,6 @@ class QueueServerTest(QueueServerTestBase):
     self.assertEqual(code, 400)
     self.assertIn("mode must be 'run'", resp["error"])
 
-  def test_timeout_is_capped_at_25_seconds(self):
-    submit = self.submit(self.python_cmd("print('capped')"), timeout=90)
-    self.assertEqual(submit["timeout"], 25)
-
-    job = self.get_json(f"/job/{submit['job_id']}")
-    self.assertEqual(job["timeout"], 25)
-
-    result = self.wait_for_done(submit["job_id"])
-    self.assertEqual(result["exit_code"], 0)
-
   def test_round_robin_interleaves_clients(self):
     seq = Path(self.temp_dir.name) / "seq.txt"
     gate = Path(self.temp_dir.name) / "round_robin_gate"

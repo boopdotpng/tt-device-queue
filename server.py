@@ -54,7 +54,6 @@ from urllib.parse import parse_qs, urlparse
 
 HOST = os.environ.get("TT_DEVICE_HOST", "127.0.0.1")
 PORT = int(os.environ.get("TT_DEVICE_PORT", "5741"))
-RUN_TIMEOUT = 25
 REPO_ROOT = Path(__file__).resolve().parent
 LOG_DIR = Path(os.environ.get("TT_DEVICE_LOG_DIR", str(REPO_ROOT / "logs")))
 DB_PATH = LOG_DIR / "jobs.sqlite3"
@@ -161,12 +160,12 @@ class DeviceDeadError(RuntimeError):
 
 def _run_timeout(value) -> int:
   if value is None:
-    return RUN_TIMEOUT
+    return 0
   try:
     timeout = int(value)
   except (TypeError, ValueError):
     raise ValueError("timeout must be an integer")
-  return max(1, min(timeout, RUN_TIMEOUT))
+  return max(0, timeout)
 
 
 def _timeout_message(job: "Job") -> str:
@@ -1673,7 +1672,7 @@ def main():
 
   server = HTTPServer((HOST, PORT), Handler)
   print(f"tt-device-queue listening on http://{HOST}:{PORT}")
-  print(f"Run timeout cap: {RUN_TIMEOUT}s")
+  print("Run timeout default: none")
   print(f"Output dir: {LOG_DIR}")
   print(f"SQLite db: {DB_PATH}")
   try:
