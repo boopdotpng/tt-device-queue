@@ -17,8 +17,10 @@ class McpSurfaceTest(unittest.IsolatedAsyncioTestCase):
             list(inspect.signature(mcp_server.queue_python).parameters),
             ["script", "cwd", "repeat", "python", "args"],
         )
-        for name in ("queue", "queue_python", "job", "logs", "result", "status", "kill", "cancel", "reset", "last_breakage"):
+        for name in ("queue", "queue_python", "job", "logs", "result", "status", "kill", "reset"):
             self.assertTrue(hasattr(mcp_server, name), name)
+        for name in ("cancel", "last_breakage"):
+            self.assertFalse(hasattr(mcp_server, name), name)
 
     async def test_queue_payload_preserves_client_fairness_shape(self) -> None:
         response = {

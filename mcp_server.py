@@ -224,12 +224,6 @@ async def status() -> str:
     return "\n".join(lines)
 
 
-@server.tool(name="last_breakage")
-async def last_breakage() -> str:
-    """Show the most recent device breakage report."""
-    return json.dumps(await _get("/breakage"), indent=2)
-
-
 @server.tool(name="kill")
 async def kill(job_id: str = "") -> str:
     """Gracefully stop the running job, escalating when necessary."""
@@ -239,14 +233,6 @@ async def kill(job_id: str = "") -> str:
         f"Sent {stopped.get('signal', 'SIGINT')} to job [{stopped['id']}] {stopped['cmd']}"
         if stopped else "Nothing running to kill."
     )
-
-
-@server.tool(name="cancel")
-async def cancel(job_id: str) -> str:
-    """Cancel a queued job."""
-    result = await _post("/cancel", {"job_id": job_id})
-    cancelled = result.get("cancelled")
-    return f"Cancelled queued job [{cancelled['id']}] {cancelled['cmd']}" if cancelled else json.dumps(result, indent=2)
 
 
 @server.tool(name="reset")

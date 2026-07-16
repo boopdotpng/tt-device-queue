@@ -14,9 +14,7 @@ The MCP tools retain their names and primary arguments:
 - `logs(job_id, offset=0, limit=16384)`
 - `result(job_id)`
 - `status()`
-- `last_breakage()`
 - `kill(job_id="")`
-- `cancel(job_id)`
 - `reset(job_id="")`
 
 The HTTP service retains `POST /queue`, `/cancel`, `/kill`, `/reset` and
